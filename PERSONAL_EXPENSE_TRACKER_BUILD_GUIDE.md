@@ -180,3 +180,84 @@ Add accessible error/empty/loading states, responsive layouts, tests, logging, p
 ## 9. Recommended first working slice
 
 Do not start with graphs. Complete this journey first: register → sign in → create an expense category → add a transaction → list it after refresh → edit it → delete it → verify a second user cannot access it. That proves the frontend, API, database, security, and user experience are connected correctly.
+
+## 10. Initial setup, explained
+
+The repository now uses `frontend` and `backend` as the project roots described above. They run independently in two terminals because Vite serves the browser application while Flask serves JSON data.
+
+### Frontend setup and commands
+
+Copy `frontend/.env.example` to `frontend/.env` before development. `VITE_API_BASE_URL` is intentionally public: Vite exposes only variables prefixed with `VITE_` to the browser, so never store a password, JWT secret, or database URL in this file.
+
+Run these commands from `frontend`:
+
+```bash
+npm install
+npm run dev
+```
+
+Vite prints the local URL (normally `http://localhost:5173`). `npm run build` produces the deployable browser bundle in `frontend/dist`; it should pass before a release. `npm run test` runs the Vitest unit suite. Playwright is included for later end-to-end tests, but its browser binaries are deliberately not downloaded until tests are introduced (`npx playwright install`).
+
+The installed frontend packages have distinct jobs:
+
+| Package | Why it is included |
+| --- | --- |
+| `react`, `react-dom`, `vite` | Render the application and provide a fast local development/build workflow. |
+| `react-router-dom` | Maps URLs to public and authenticated pages. |
+| `axios` | Provides one API client with a base URL, token handling, and consistent error conversion. |
+| `react-hook-form`, `zod`, `@hookform/resolvers` | Keep forms responsive and apply the same clear validation rules before requests are sent. |
+| `dayjs` | Parses, selects, and formats transaction dates and selected months. |
+| `recharts` | Draws the report chart only after the text totals are correct. |
+| `lucide-react` | Supplies consistent, accessible SVG icons. |
+| `vitest`, Testing Library, `jsdom` | Test components from a user's perspective without starting a real browser. |
+| `@playwright/test` | Supports the few high-value browser flows described in the testing guide. |
+
+### Backend setup and commands
+
+Copy `backend/.env.example` to `backend/.env`, replace both secret placeholders with unique random values, and never commit that file. `DATABASE_URL` has a local SQLite default; the resulting database is stored in `backend/instance` and is ignored by Git.
+
+Create and activate a virtual environment, then install the dependencies:
+
+```bash
+cd backend
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python run.py
+```
+
+Flask should answer `GET http://127.0.0.1:5000/api/health` with `{ "status": "ok" }`. That endpoint is intentionally public; it confirms the server is reachable but does not expose user or financial data. Once the API is running, the frontend can call it through the URL in its `.env` file.
+
+The backend is intentionally organized around an application factory (`app.create_app`). This makes the same application easy to run locally, configure for tests, and deploy without duplicated setup. Flask extensions are initialized in `extensions.py`, then connected to the application in the factory. Routes, models, validation schemas, and calculation services stay in separate packages so HTTP code does not become the place where all business logic lives.
+
+## 11. How the core functionality fits together
+
+### Authentication and privacy
+
+Registration validates a display name, unique email, and sufficiently strong password. The backend hashes the password with `bcrypt`; it never stores the submitted password. A successful sign-in returns or sets a JWT-based session according to the chosen storage strategy. The React API client attaches that session only to protected requests, while a protected-route component redirects signed-out visitors to sign in.
+
+An authenticated identity is not enough on its own. Every category, transaction, and budget query must include the current user's ID. For example, updating `/api/transactions/42` must first load transaction 42 *for the current user*; a record belonging to someone else should return a non-disclosing not-found/forbidden response. This ownership check belongs on every read, update, and delete endpoint, not only in the visible UI.
+
+### Categories and transactions
+
+Categories make reporting meaningful. A category has one type (`income` or `expense`), a name, an optional color/icon, and an active state. Archiving preserves historical transactions but removes the category from new-entry choices. Deleting should only be allowed when it cannot damage history, or it should require a deliberate migration of existing transactions.
+
+When a transaction is created or edited, validate all fields on the server: date, positive integer minor-unit amount, type, category ownership, and category/type match. Store `1250` for a $12.50 amount. The browser converts a user-friendly decimal input into minor units at the API boundary, and shared formatting helpers convert it back for display. This keeps totals exact and prevents floating-point artifacts.
+
+### Monthly overview, budgets, and reports
+
+The selected month must be passed to both transaction lists and summary endpoints in a consistent format such as `YYYY-MM`. The backend calculates income, expenses, and balance from records inside that month; it should not trust a browser-provided total. Recent transactions are a limited, date-sorted subset of the same owned records.
+
+A budget is an expense-category limit for one month. Its uniqueness rule is `(user_id, category_id, month)`, so saving a budget for the same category and month updates the existing value rather than producing duplicates. Budget progress is calculated from that category's expense transactions in the matching month: spent, remaining (`budget - spent`), and status (on track, at limit, or over budget). The Reports page reuses these server-side totals for category breakdowns and optional charts.
+
+## 12. Implementation order and definition of done
+
+1. **Foundation:** Start both servers, call `/api/health`, and confirm browser CORS allows only the configured local frontend origin.
+2. **Accounts:** Add the User model, migration, registration/sign-in/current-user endpoints, and the sign-in screens. Test invalid and duplicate credentials as well as a request with no token.
+3. **Categories and transactions:** Add database constraints, server validation, owned CRUD endpoints, and the matching forms/lists. Test a second user cannot access guessed IDs.
+4. **Overview:** Add one month-query service, summary endpoint, summary cards, and a recent-transactions view. Verify totals with known integer amounts before designing charts.
+5. **Budgets and reports:** Add the budget uniqueness constraint, progress calculation, category totals, and the reports/budgets pages. Test empty months and exactly-at-budget values.
+6. **Release readiness:** Add loading, error, empty, keyboard-accessible, and mobile states; run the complete backend/frontend suites; then configure production secrets, restricted CORS, backups, and deployment.
+
+For each milestone, a feature is done only when its request validation, authentication/ownership behavior, success path, and meaningful error/empty state are covered by the scenarios in `PERSONAL_EXPENSE_TRACKER_TEST_PLAN.md`. This prevents attractive screens from masking incorrect financial totals or privacy holes.
