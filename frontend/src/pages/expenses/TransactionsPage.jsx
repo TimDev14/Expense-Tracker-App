@@ -1,0 +1,14 @@
+import { useEffect, useState } from 'react'
+import { api } from '../../api/client'
+import { EmptyState, Status } from '../../components/shared/Status'
+import { currentMonth, formatMoney } from '../../utils/format'
+import { useProductContext } from '../../context/UseProductContext'
+
+export function TransactionsPage() {
+  const [month, setMonth] = useState(currentMonth()); const [transactions, setTransactions] = useState([]); const [categories, setCategories] = useState([]); const [message, setMessage] = useState('')
+  const [form, setForm] = useState({ type: 'expense', categoryId: '', amount: '', date: new Date().toISOString().slice(0, 10), description: '' }); const { user } = useProductContext()
+  const load = () => { api.get(`/transactions?month=${month}`).then((data) => setTransactions(data.transactions)).catch((p) => setMessage(p.error)); api.get('/categories').then((data) => setCategories(data.categories)) }
+  useEffect(load, [month])
+  async function submit(event) { event.preventDefault(); try { await api.post('/transactions', { ...form, categoryId: Number(form.categoryId), amountMinor: Math.round(Number(form.amount) * 100) }); setForm({ ...form, amount: '', description: '' }); load() } catch (problem) { setMessage(problem.error) } }
+  return <><header><h2>Transactions</h2><input type="month" value={month} onChange={(e) => setMonth(e.target.value)} /></header><form className="inline-form" onSubmit={submit}><select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value, categoryId: '' })}><option value="expense">Expense</option><option value="income">Income</option></select><select required value={form.categoryId} onChange={(e) => setForm({ ...form, categoryId: e.target.value })}><option value="">Choose category</option>{categories.filter((item) => item.type === form.type).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input required min="0.01" step="0.01" placeholder="Amount" type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} /><input required type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /><input placeholder="Description" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /><button>Add</button></form>{message && <Status type="error">{message}</Status>}{transactions.length ? <ul className="records">{transactions.map((item) => <li key={item.id}><span>{item.description || item.category.name}</span><strong>{formatMoney(item.amountMinor, user.defaultCurrency)}</strong><small>{item.date}</small><button onClick={async () => { await api.delete(`/transactions/${item.id}`); load() }}>Delete</button></li>)}</ul> : <EmptyState>No transactions in this month.</EmptyState>}</>
+}
